@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>RealMeasure</title>
+<style>
+:root{--bg:#FEF7FF;--fg:#1D1B20;--sc:#F3EDF7;--sch:#ECE6F0;--p:#6750A4;--onp:#fff;--pc:#EADDFF;--onpc:#21005D;--out:#79747E;--err:#B3261E;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light dark}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141218;--fg:#E6E0E9;--sc:#211F26;--sch:#2B2930;--p:#D0BCFF;--onp:#381E72;--pc:#4F378B;--onpc:#EADDFF;--out:#938F99;--err:#F2B8B5}}
+:root[data-theme="dark"]{--bg:#141218;--fg:#E6E0E9;--sc:#211F26;--sch:#2B2930;--p:#D0BCFF;--onp:#381E72;--pc:#4F378B;--onpc:#EADDFF;--out:#938F99;--err:#F2B8B5}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:400 15px/1.4 system-ui,Roboto,sans-serif;display:flex;flex-direction:column;overflow:hidden}
+header{text-align:center;font:500 22px/56px system-ui,Roboto,sans-serif;flex:none}
+#stage{flex:1;min-height:0;margin:0 12px;border-radius:28px;background:var(--sc);display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative}
+#frame{position:relative;height:100%;max-width:100%;aspect-ratio:3/4}
+video,canvas{position:absolute;inset:0;width:100%;height:100%}
+#start{position:absolute;inset:0;display:flex;flex-direction:column;gap:12px;align-items:center;justify-content:center;text-align:center;padding:24px;transition:opacity .4s}
+.btn{border:0;border-radius:20px;padding:0 24px;height:40px;font:500 14px system-ui;cursor:pointer;background:var(--p);color:var(--onp);transition:transform .2s cubic-bezier(.3,1.5,.5,1)}
+.btn:active{transform:scale(.94)}
+.seg{display:flex;border:1px solid var(--out);border-radius:20px;overflow:hidden;flex:none}
+.seg button{flex:1;border:0;height:40px;background:none;color:var(--fg);font:500 14px system-ui;cursor:pointer;transition:background .3s,color .3s}
+.seg button.on{background:var(--pc);color:var(--onpc)}
+#sheet{flex:none;background:var(--sc);border-radius:28px 28px 0 0;margin-top:12px;padding:16px;display:flex;flex-direction:column;gap:12px}
+#metrics{display:flex;justify-content:space-around;text-align:center}
+.m b{display:block;font:500 26px system-ui;font-variant-numeric:tabular-nums}
+.m span{font-size:12px;color:var(--out)}
+.chip{align-self:flex-start;background:var(--pc);color:var(--onpc);border-radius:8px;padding:4px 12px;font-size:13px;transition:opacity .3s}
+.row{display:flex;align-items:center;gap:12px;font-size:13px}
+.row label{width:110px;flex:none}
+input[type=range]{flex:1;accent-color:var(--p)}
+#hint{font-size:13px;color:var(--out);min-height:18px}
+</style>
+</head>
+<body>
+<header>RealMeasure</header>
+<div id="stage"><div id="frame"><video id="v" playsinline muted autoplay></video><canvas id="c"></canvas></div>
+<div id="start"><div style="font:500 20px system-ui">Measure height, distance and speed</div>
+<div style="color:var(--out)">Stand where the object&rsquo;s base is visible on flat ground. Hold your phone steady.</div>
+<button class="btn" id="go">Start camera</button><div id="err" style="color:var(--err);font-size:13px"></div></div></div>
+<div id="sheet">
+<div class="seg"><button id="mTap" class="on">Tap to measure</button><button id="mMot">Auto motion</button></div>
+<div id="metrics"><div class="m"><b id="vH">&ndash;</b><span>Height (m)</span></div><div class="m"><b id="vD">&ndash;</b><span>Distance (m)</span></div><div class="m"><b id="vS">&ndash;</b><span>Speed (km/h)</span></div></div>
+<div id="hint">Tap the object&rsquo;s base on the ground, then its top.</div>
+<div class="chip" id="chip" style="opacity:0">&nbsp;</div>
+<div class="row"><label>Phone height <span id="lh">1.50</span> m</label><input type="range" id="sh" min="0.5" max="2.2" step="0.05" value="1.5"></div>
+<div class="row"><label>Camera FOV <span id="lf">60</span>&deg;</label><input type="range" id="sf" min="40" max="80" step="1" value="60"></div>
+</div>
+<script>
+const $=id=>document.getElementById(id), v=$('v'), c=$('c'), ctx=c.getContext('2d'), fr=$('frame');
+let camH=1.5, fov=60, pitch=0, mode='tap', taps=[], tapPitch=0, tgt={h:NaN,d:NaN,s:0}, shown={h:0,d:0,s:0}, err=0, trk=null;
+$('sh').oninput=e=>{camH=+e.target.value;$('lh').textContent=camH.toFixed(2)};
+$('sf').oninput=e=>{fov=+e.target.value;$('lf').textContent=fov};
+function setMode(m){mode=m;taps=[];tgt={h:NaN,d:NaN,s:0};trk=null;
+ $('mTap').classList.toggle('on',m=='tap');$('mMot').classList.toggle('on',m=='mot');
+ $('hint').textContent=m=='tap'?'Tap the object\u2019s base on the ground, then its top.':'Keep the phone still. The moving object is boxed automatically.';draw()}
+$('mTap').onclick=()=>setMode('tap');$('mMot').onclick=()=>setMode('mot');
+
+// geometry: same ground-plane math as the Android app
+const fy=()=>0.5/Math.tan(fov*Math.PI/360), elev=(yn,p)=>p+Math.atan((0.5-yn)/fy());
+function geom(base,top,p){const eb=elev(base,p);if(eb>-0.02)return null;
+ const d=camH/Math.tan(-eb), h=Math.max(0,camH+d*Math.tan(elev(top,p)));return{d,h}}
+
+// phone tilt: beta is 90 when upright, so pitch up = beta-90
+function onOri(e){if(e.beta==null)return;const p=(e.beta-90)*Math.PI/180;pitch+=0.25*(p-pitch)}
+async function sensors(){try{if(DeviceOrientationEvent.requestPermission){if(await DeviceOrientationEvent.requestPermission()!=='granted')return}}catch(e){}
+ addEventListener('deviceorientation',onOri)}
+
+$('go').onclick=async()=>{try{
+ await sensors();
+ v.srcObject=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280}},audio:false});
+ await v.play();fr.style.aspectRatio=v.videoWidth+'/'+v.videoHeight;
+ $('start').style.opacity=0;setTimeout(()=>$('start').style.display='none',400);
+ setTimeout(sizeC,50);requestAnimationFrame(loop)
+}catch(e){$('err').textContent='Camera blocked. Open this page directly in your browser and allow camera access.'}};
+function sizeC(){c.width=fr.clientWidth*devicePixelRatio;c.height=fr.clientHeight*devicePixelRatio}
+addEventListener('resize',sizeC);
+
+c.addEventListener('pointerdown',e=>{if(mode!='tap')return;const r=c.getBoundingClientRect();
+ const pt={x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height};
+ if(taps.length==2)taps=[];if(!taps.length)tapPitch=pitch;taps.push(pt);
+ if(taps.length==2){const g=geom(taps[0].y,taps[1].y,tapPitch);
+  if(g){tgt={h:g.h,d:g.d,s:0};err=2+g.d*1.5}else{tgt={h:NaN,d:NaN,s:0};$('hint').textContent='Base is above the horizon. Tilt the phone down.'}}
+ else tgt={h:NaN,d:NaN,s:0};draw()});
+
+// auto motion: frame differencing on a small grayscale copy, finds the moving blob
+const W=64,H=48,sm=document.createElement('canvas');sm.width=W;sm.height=H;const sx=sm.getContext('2d',{willReadFrequently:true});
+let prev=null,last=0,box=null;
+function motion(t){if(t-last<90)return;last=t;sx.drawImage(v,0,0,W,H);const d=sx.getImageData(0,0,W,H).data;
+ const g=new Float32Array(W*H);for(let i=0;i<W*H;i++)g[i]=d[i*4]*.3+d[i*4+1]*.6+d[i*4+2]*.1;
+ if(prev){let l=W,r=0,tp=H,b=0,n=0;for(let y=0;y<H;y++)for(let x=0;x<W;x++){if(Math.abs(g[y*W+x]-prev[y*W+x])>28){n++;if(x<l)l=x;if(x>r)r=x;if(y<tp)tp=y;if(y>b)b=y}}
+  if(n>25){box={l:l/W,r:(r+1)/W,t:tp/H,b:(b+1)/H};const gm=geom(box.b,box.t,pitch);
+   if(gm){const asp=v.videoWidth/v.videoHeight,az=Math.atan(((box.l+box.r)/2-.5)*asp/fy()),x=gm.d*Math.sin(az),y=gm.d*Math.cos(az),now=t/1000;
+    if(trk&&now-trk.t>0.05){const sp=Math.hypot(x-trk.x,y-trk.y)/(now-trk.t);trk.s+=0.25*(sp-trk.s);trk.x=x;trk.y=y;trk.t=now}else if(!trk)trk={x,y,t:now,s:0};
+    tgt={h:gm.h,d:gm.d,s:trk.s*3.6};err=2+gm.d*1.5}}else box=null}
+ prev=g}
+
+function draw(){ctx.clearRect(0,0,c.width,c.height);const W2=c.width,H2=c.height,col=getComputedStyle(document.documentElement).getPropertyValue('--p').trim()||'#6750A4';
+ ctx.strokeStyle='#fff';ctx.fillStyle='#fff';ctx.lineWidth=3*devicePixelRatio;ctx.shadowColor='rgba(0,0,0,.6)';ctx.shadowBlur=6;
+ taps.forEach(p=>{ctx.beginPath();ctx.arc(p.x*W2,p.y*H2,9*devicePixelRatio,0,7);ctx.fill()});
+ if(taps.length==2){ctx.beginPath();ctx.moveTo(taps[0].x*W2,taps[0].y*H2);ctx.lineTo(taps[1].x*W2,taps[1].y*H2);ctx.stroke()}
+ if(mode=='mot'&&box){ctx.beginPath();ctx.roundRect(box.l*W2,box.t*H2,(box.r-box.l)*W2,(box.b-box.t)*H2,14*devicePixelRatio);ctx.stroke()}
+ // horizon guide
+ const hy=(0.5+Math.tan(pitch)*fy())*H2;ctx.shadowBlur=0;ctx.globalAlpha=.5;ctx.setLineDash([10,10]);ctx.beginPath();ctx.moveTo(0,hy);ctx.lineTo(W2,hy);ctx.stroke();ctx.setLineDash([]);ctx.globalAlpha=1}
+
+function loop(t){if(mode=='mot')motion(t);
+ for(const k of ['h','d','s']){const T=isNaN(tgt[k])?0:tgt[k];shown[k]+=(T-shown[k])*0.15}
+ const ok=!isNaN(tgt.h);$('vH').textContent=ok?shown.h.toFixed(2):'\u2013';$('vD').textContent=ok?shown.d.toFixed(2):'\u2013';
+ $('vS').textContent=ok&&mode=='mot'?shown.s.toFixed(1):'\u2013';
+ $('chip').style.opacity=ok?1:0;if(ok)$('chip').textContent='Estimated error \u00B1'+Math.min(99,err).toFixed(0)+'%';
+ draw();requestAnimationFrame(loop)}
+</script>
+</body>
+</html>
